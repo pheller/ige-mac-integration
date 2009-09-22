@@ -19,7 +19,7 @@
 
 #include <config.h>
 #include <gtk/gtk.h>
-#include <Carbon/Carbon.h>
+#include <ApplicationServices/ApplicationServices.h>
 
 #include "ige-mac-image-utils.h"
 

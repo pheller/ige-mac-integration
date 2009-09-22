@@ -21,7 +21,7 @@
 #define __IGE_MAC_IMAGE_UTILS_H__
 
 #include <gdk-pixbuf/gdk-pixbuf.h>
-#include <Carbon/Carbon.h>
+#include <ApplicationServices/ApplicationServices.h> /* <CoreGraphics/CGImage.h> */
 
 G_BEGIN_DECLS
 
