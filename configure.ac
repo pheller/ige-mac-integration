@@ -23,6 +23,16 @@ IMENDIO_PYTHON_CHECK
 
 PKG_CHECK_MODULES(MAC, [gtk+-2.0 >= 2.13])
 
+if false; then
+  AC_DEFINE(USE_CARBON, 1, [Define to 1 when using Carbon framework])
+  WITH_CARBON_FRAMEWORK='-framework Carbon'
+else
+  AC_DEFINE(USE_COCOA, 1, [Define to 1 when using Cocoa framework])
+  WITH_COCOA_FRAMEWORK='-framework Cocoa'
+fi
+AC_SUBST(WITH_CARBON_FRAMEWORK)
+AC_SUBST(WITH_COCOA_FRAMEWORK)
+
 # This will cause the automake generated makefiles to pass the correct
 # flags to aclocal.
 ACLOCAL_AMFLAGS="\${ACLOCAL_FLAGS}"
