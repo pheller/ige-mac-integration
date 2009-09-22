@@ -27,7 +27,10 @@
 #include <gtk/gtk.h>
 #include <gdk/gdkkeysyms.h>
 #include <gdk/gdkquartz.h>
+#include <ApplicationServices/ApplicationServices.h>
+#ifdef USE_CARBON
 #include <Carbon/Carbon.h>
+#endif
 #import <Cocoa/Cocoa.h>
 
 #include "ige-mac-menu.h"
@@ -48,17 +51,24 @@
 
 #define IGE_MAC_KEY_HANDLER     "ige-mac-key-handler"
 
-#define DEBUG FALSE
-#define DEBUG_SET FALSE
-#define DEBUG_SYNC FALSE
+#define DEBUG TRUE //FALSE
+#define DEBUG_SET TRUE //FALSE
+#define DEBUG_SYNC TRUE //FALSE
 #define DEBUG_SIGNAL FALSE
 #define DEBUG_CARBON FALSE
+#define DEBUG_COCOA TRUE //FALSE
 
-static MenuID   last_menu_id;
 static gboolean global_key_handler_enabled = TRUE;
+
+#ifdef USE_CARBON
+static MenuID   last_menu_id;
 
 static void   sync_menu_shell (GtkMenuShell *menu_shell, MenuRef carbon_menu,
 			       gboolean toplevel, gboolean debug);
+#else
+static void   sync_menu_shell (GtkMenuShell *menu_shell, NSMenu *cocoa_menu,
+			       gboolean toplevel, gboolean debug);
+#endif
 
 /* A category that exposes the protected carbon event for an NSEvent. */
 @interface NSEvent (GdkQuartzNSEvent)
@@ -71,12 +81,14 @@ static void   sync_menu_shell (GtkMenuShell *menu_shell, MenuRef carbon_menu,
 }
 @end
 
+#ifdef USE_CARBON
 static gboolean
 menu_flash_off_cb (gpointer data) {
     /* Disable flash by flashing a non-existing menu id. */
     FlashMenuBar (last_menu_id + 1);
     return FALSE;
 }
+#endif
 
 /*
  * utility functions
@@ -117,6 +129,11 @@ accel_find_func (GtkAccelKey *key, GClosure *closure, gpointer data) {
     return (GClosure *) data == closure;
 }
 
+
+#ifdef USE_CARBON
+#if 0
+#pragma mark -
+#endif
 
 /*
  * CarbonMenu functions
@@ -1197,3 +1214,756 @@ ige_mac_menu_sync(GtkMenuShell *menu_shell) {
     sync_menu_shell (menu_shell, carbon_menu->menu,
 		     carbon_menu->toplevel, DEBUG_SYNC);
 }
+
+#else /* USE_COCOA */
+#if 0
+#pragma mark -
+#endif
+/*
+ * CocoaMenu functions
+ */
+
+typedef struct {
+    NSMenu *menu;
+    guint   toplevel : 1;
+} CocoaMenu;
+
+static GQuark cocoa_menu_quark = 0;
+
+static CocoaMenu *
+cocoa_menu_new (void) {
+    return g_slice_new0 (CocoaMenu);
+}
+
+static void
+cocoa_menu_free (CocoaMenu *menu) {
+    if (menu->menu)
+      [menu->menu release];
+    g_slice_free (CocoaMenu, menu);
+}
+
+static CocoaMenu *
+cocoa_menu_get (GtkWidget *widget) {
+    return g_object_get_qdata (G_OBJECT (widget), cocoa_menu_quark);
+}
+
+static void
+cocoa_menu_connect (GtkWidget *menu, NSMenu *nsmenu, gboolean toplevel) {
+    CocoaMenu *cocoa_menu = cocoa_menu_get (menu);
+    if (!cocoa_menu) {
+	cocoa_menu = cocoa_menu_new ();
+	g_object_set_qdata_full (G_OBJECT (menu), cocoa_menu_quark, 
+				 cocoa_menu,
+				 (GDestroyNotify) cocoa_menu_free);
+    }
+    cocoa_menu->menu     = nsmenu;
+    cocoa_menu->toplevel = toplevel;
+}
+
+/*
+ * CocoaMenuItem functions
+ */
+
+typedef struct {
+    NSMenuItem      *menuitem;
+    //int             index;
+    NSMenu          *submenu;
+    GClosure      *accel_closure;
+} CocoaMenuItem;
+
+
+static GQuark cocoa_menu_item_quark = 0;
+
+static CocoaMenuItem *
+cocoa_menu_item_new (void) {
+    return g_slice_new0 (CocoaMenuItem);
+}
+
+#define cocoa_menu_nil_return_label(obj, label, msg)	\
+    if (obj == nil) { \
+    	if (DEBUG_CARBON) \
+	    g_printerr("%s: %s %s\n", G_STRFUNC, label, msg); \
+	return;\
+    }
+
+static void
+cocoa_menu_item_free (CocoaMenuItem *menu_item) {
+    if (menu_item->menuitem)
+        [[menu_item->menuitem menu] removeItem: menu_item->menuitem];
+    if (menu_item->accel_closure)
+	g_closure_unref (menu_item->accel_closure);
+    g_slice_free (CocoaMenuItem, menu_item);
+}
+
+static CocoaMenuItem *
+cocoa_menu_item_get (GtkWidget *widget) {
+    return g_object_get_qdata (G_OBJECT (widget), cocoa_menu_item_quark);
+}
+
+static CocoaMenuItem *
+cocoa_menu_item_get_checked (GtkWidget *widget) {
+    CocoaMenuItem * cocoa_item = cocoa_menu_item_get(widget);
+    GtkWidget *checkWidget = NULL;
+    const gchar *label = get_menu_label_text(GTK_WIDGET(widget), NULL);
+    const gchar *name = gtk_widget_get_name(widget);
+
+    if (!cocoa_item)
+	return NULL;
+
+#if 0
+    if (checkWidget == nil) {
+	if (DEBUG_COCOA)
+	    g_printerr("%s: Widget %s %s Cross-check error\n", G_STRFUNC,
+		       name, label);
+	return NULL;
+    }
+#endif
+
+/* This could check the checkWidget, but that could turn into a
+ * recursion nightmare, so worry about it when it we run
+ * cocoa_menu_item_get on it.
+ */
+    if (widget != checkWidget) {
+	const gchar *clabel = get_menu_label_text(GTK_WIDGET(checkWidget), 
+						  NULL);
+	const gchar *cname = gtk_widget_get_name(checkWidget);
+	if (DEBUG_COCOA)
+	    g_printerr("%s: Widget mismatch, expected %s %s got %s %s\n", 
+		       G_STRFUNC, name, label, cname, clabel);
+	return NULL;
+    }
+    return cocoa_item;
+}
+
+static void
+cocoa_menu_item_update_state (CocoaMenuItem *cocoa_item, GtkWidget *widget) {
+    gboolean sensitive;
+    gboolean visible;
+
+    g_object_get (widget, "sensitive", &sensitive, "visible",   &visible, NULL);
+    if (!sensitive)
+	[cocoa_item->menuitem setEnabled:NO];
+    else
+	[cocoa_item->menuitem setEnabled:YES];
+/*
+    if (!visible)
+	[cocoa_item->menuitem setHidden:YES];
+    else
+	[cocoa_item->menuitem setHidden:NO];
+*/
+}
+
+static void
+cocoa_menu_item_update_active (CocoaMenuItem *cocoa_item, 
+				GtkWidget *widget) {
+    gboolean active;
+    g_object_get (widget, "active", &active, NULL);
+    if (!active)
+	[cocoa_item->menuitem setState:NSOffState];
+    else
+	[cocoa_item->menuitem setState:NSOnState];
+}
+
+static void
+cocoa_menu_item_update_submenu (CocoaMenuItem *cocoa_item, 
+				 GtkWidget *widget, bool debug) {
+    GtkWidget *submenu;
+    const gchar *label_text;
+    NSString *nsstr = nil;
+
+    label_text = get_menu_label_text (widget, NULL);
+    submenu = gtk_menu_item_get_submenu (GTK_MENU_ITEM (widget));
+    if (!submenu) {
+        [cocoa_item->menuitem setSubmenu: nil];
+	return;
+    }
+    if (label_text)
+	nsstr = [NSString stringWithUTF8String: label_text];
+    cocoa_item->submenu = [[NSMenu alloc] initWithTitle: nsstr ? nsstr : @""];
+    cocoa_menu_nil_return_label(cocoa_item->submenu, label_text, "Failed to create new menu");
+    if (nsstr)
+	[nsstr release];
+    [cocoa_item->menuitem setSubmenu: cocoa_item->submenu];
+    sync_menu_shell (GTK_MENU_SHELL (submenu), cocoa_item->submenu, 
+		     FALSE, debug);
+}
+
+static void
+cocoa_menu_item_update_label (CocoaMenuItem *cocoa_item, GtkWidget *widget) {
+    const gchar *label_text;
+    NSString  *nsstr = nil;
+
+    label_text = get_menu_label_text (widget, NULL);
+    if (label_text)
+	nsstr = [NSString stringWithUTF8String: label_text];
+    [cocoa_item->menuitem setTitle: nsstr ? nsstr : @""];
+    if (nsstr)
+	[nsstr release];
+}
+
+static void
+cocoa_menu_item_update_accelerator (CocoaMenuItem *cocoa_item,
+				     GtkWidget *widget) {
+    GtkAccelKey *key;
+    GtkWidget *label;
+    GdkDisplay *display = NULL;
+    GdkKeymap *keymap = NULL;
+    GdkKeymapKey *keys = NULL;
+    gint n_keys = 0;
+    char keystr[2];
+    unsigned int modifiers = 0;
+
+    const gchar *label_txt = get_menu_label_text (widget, &label);
+    if (!(GTK_IS_ACCEL_LABEL (label) 
+	  && GTK_ACCEL_LABEL (label)->accel_closure)) {
+        (void) label_txt;
+        [cocoa_item->menuitem setKeyEquivalent: @""];
+        [cocoa_item->menuitem setKeyEquivalentModifierMask: 0];
+	return;
+    }
+    key = gtk_accel_group_find (GTK_ACCEL_LABEL (label)->accel_group,
+				    accel_find_func,
+				    GTK_ACCEL_LABEL (label)->accel_closure);
+    if (!(key && key->accel_key && key->accel_flags & GTK_ACCEL_VISIBLE))
+	return;
+    display = gtk_widget_get_display (widget);
+    keymap  = gdk_keymap_get_for_display (display);
+
+    if (!gdk_keymap_get_entries_for_keyval (keymap, key->accel_key,
+					    &keys, &n_keys))
+	return;
+
+    keystr[0] = keys[0].keycode; keystr[1] = '\0';
+    [cocoa_item->menuitem setKeyEquivalent: [NSString stringWithUTF8String: keystr]];
+    g_free (keys);
+    modifiers = NSCommandKeyMask;
+    if (key->accel_mods) {
+	if (key->accel_mods & GDK_SHIFT_MASK)
+	    modifiers |= NSShiftKeyMask;
+	if (key->accel_mods & GDK_MOD1_MASK)
+	    modifiers |= NSAlternateKeyMask;
+    }
+    if (!(key->accel_mods & GDK_CONTROL_MASK)) {
+	modifiers &= ~NSCommandKeyMask; // NSControlKeyMask ?
+    }
+    [cocoa_item->menuitem setKeyEquivalentModifierMask: modifiers];
+    return;
+}
+
+static void
+cocoa_menu_item_accel_changed (GtkAccelGroup *accel_group, guint keyval,
+				GdkModifierType  modifier,
+				GClosure *accel_closure, GtkWidget *widget) {
+    CocoaMenuItem *cocoa_item = cocoa_menu_item_get (widget);
+    GtkWidget      *label;
+
+    const gchar *label_text = get_menu_label_text (widget, &label);
+    if (!cocoa_item) {
+	if (DEBUG_COCOA)
+	    g_printerr("%s: Bad cocoa item for %s\n", G_STRFUNC, label_text);
+	return;
+    }
+    if (GTK_IS_ACCEL_LABEL (label) &&
+	GTK_ACCEL_LABEL (label)->accel_closure == accel_closure)
+	cocoa_menu_item_update_accelerator (cocoa_item, widget);
+}
+
+static void
+cocoa_menu_item_update_accel_closure (CocoaMenuItem *cocoa_item,
+				       GtkWidget *widget) {
+    GtkAccelGroup *group;
+    GtkWidget     *label;
+    get_menu_label_text (widget, &label);
+    if (cocoa_item->accel_closure) {
+	group = gtk_accel_group_from_accel_closure (cocoa_item->accel_closure);
+	g_signal_handlers_disconnect_by_func (group,
+					      cocoa_menu_item_accel_changed,
+					      widget);
+	g_closure_unref (cocoa_item->accel_closure);
+	cocoa_item->accel_closure = NULL;
+    }
+    if (GTK_IS_ACCEL_LABEL (label))
+	cocoa_item->accel_closure = GTK_ACCEL_LABEL (label)->accel_closure;
+    if (cocoa_item->accel_closure) {
+	g_closure_ref (cocoa_item->accel_closure);
+	group = gtk_accel_group_from_accel_closure (cocoa_item->accel_closure);
+	g_signal_connect_object (group, "accel-changed",
+				 G_CALLBACK (cocoa_menu_item_accel_changed),
+				 widget, 0);
+    }
+    cocoa_menu_item_update_accelerator (cocoa_item, widget);
+}
+
+static void
+cocoa_menu_item_notify (GObject *object, GParamSpec *pspec,
+			 CocoaMenuItem *cocoa_item) {
+    if (!strcmp (pspec->name, "sensitive") ||
+	!strcmp (pspec->name, "visible")) {
+	cocoa_menu_item_update_state (cocoa_item, GTK_WIDGET (object));
+    }
+    else if (!strcmp (pspec->name, "active")) {
+	cocoa_menu_item_update_active (cocoa_item, GTK_WIDGET (object));
+    }
+    else if (!strcmp (pspec->name, "submenu")) {
+	cocoa_menu_item_update_submenu (cocoa_item, GTK_WIDGET (object), 
+DEBUG_SIGNAL);
+    }
+    else if (DEBUG)
+	g_printerr("%s: Invalid parameter specification %s\n", G_STRFUNC, 
+		   pspec->name);
+}
+
+static void
+cocoa_menu_item_notify_label (GObject *object, GParamSpec *pspec,
+			       gpointer data) {
+    CocoaMenuItem *cocoa_item = 
+	cocoa_menu_item_get_checked (GTK_WIDGET (object));
+    const gchar *label_text = get_menu_label_text(GTK_WIDGET(object), NULL);
+
+    if (!cocoa_item) {
+	if (DEBUG_COCOA)
+	    g_printerr("%s: Bad cocoa item for %s\n", G_STRFUNC, label_text);
+	return;
+    }
+   if (!strcmp (pspec->name, "label")) {
+	cocoa_menu_item_update_label (cocoa_item, GTK_WIDGET (object));
+    }
+    else if (!strcmp (pspec->name, "accel-closure")) {
+	cocoa_menu_item_update_accel_closure (cocoa_item, 
+					       GTK_WIDGET (object));
+    }
+}
+
+static CocoaMenuItem *
+cocoa_menu_item_connect (GtkWidget *menu_item, GtkWidget *label,
+			  NSMenuItem *menuitem) {
+    CocoaMenuItem *cocoa_item = 
+	cocoa_menu_item_get_checked (menu_item);
+
+    if (!cocoa_item) {
+	cocoa_item = cocoa_menu_item_new ();
+	g_object_set_qdata_full (G_OBJECT (menu_item), cocoa_menu_item_quark,
+				 cocoa_item,
+				 (GDestroyNotify) cocoa_menu_item_free);
+	g_signal_connect (menu_item, "notify",
+			  G_CALLBACK (cocoa_menu_item_notify), cocoa_item);
+	if (label)
+	    g_signal_connect_swapped(label, "notify::label",
+				     G_CALLBACK (cocoa_menu_item_notify_label),
+				     menu_item);
+    }
+    cocoa_item->menuitem = menuitem;
+    return cocoa_item;
+}
+
+static CocoaMenuItem *
+cocoa_menu_item_create (GtkWidget *menu_item, NSMenu *cocoa_menu,
+			 int index, bool debug) {
+    GtkWidget          *label      = NULL;
+    const gchar        *label_text;
+    NSString*         nsstr      = nil;
+    NSMenuItem *cocoa_menuitem = nil;
+    CocoaMenuItem *cocoa_item = NULL;
+
+    label_text = get_menu_label_text (menu_item, &label);
+    if (debug)
+	g_printerr ("%s:   -> creating new %s\n", G_STRFUNC, label_text);
+    if (label_text)
+	nsstr = [NSString stringWithUTF8String: label_text];
+    
+    if (GTK_IS_SEPARATOR_MENU_ITEM (menu_item))
+        cocoa_menuitem = [NSMenuItem separatorItem];
+    else
+        cocoa_menuitem = [[NSMenuItem alloc] initWithTitle: nsstr ? nsstr : @""
+                                             action:NULL keyEquivalent: @""];
+    [cocoa_menu insertItem: cocoa_menuitem atIndex: index-1];
+    if (!GTK_WIDGET_IS_SENSITIVE (menu_item))
+        [cocoa_menuitem setEnabled: NO];
+    else
+        [cocoa_menuitem setEnabled: YES];
+    //if (!GTK_WIDGET_VISIBLE (menu_item))
+    //	attributes |= kMenuItemAttrHidden;
+#if 0
+    err = SetMenuItemProperty (cocoa_menu, index,
+			       IGE_QUARTZ_MENU_CREATOR,
+			       IGE_QUARTZ_ITEM_WIDGET,
+			       sizeof (menu_item), &menu_item);
+#endif
+
+    if (nsstr)
+	[nsstr release];
+
+#if 0
+    if (err) {
+	cocoa_menu_warn_label(err, label_text,
+				   "Failed to set menu property");
+  	DeleteMenuItem(cocoa_menu, index); //Clean up the extra menu item
+	return NULL;
+    }
+#endif
+    cocoa_item = cocoa_menu_item_connect (menu_item, label,
+					    cocoa_menuitem);
+    if (!cocoa_item) { //Got a bad cocoa_item, bail out
+	[cocoa_menuitem release]; //Clean up the extra menu item
+	return cocoa_item;
+    }
+    if (GTK_IS_CHECK_MENU_ITEM (menu_item))
+	cocoa_menu_item_update_active (cocoa_item, menu_item);
+    cocoa_menu_item_update_accel_closure (cocoa_item, menu_item);
+    if (gtk_menu_item_get_submenu (GTK_MENU_ITEM (menu_item)))
+	cocoa_menu_item_update_submenu (cocoa_item, menu_item, debug);
+    return cocoa_item;
+}
+
+gboolean
+ige_mac_menu_handle_menu_event (GdkEventKey *event) {
+    NSEvent *nsevent;
+
+    /* FIXME: If the event here is unallocated, we crash. */
+    nsevent = gdk_quartz_event_get_nsevent ((GdkEvent *) event);
+#if 0
+    if (nsevent)
+	return nsevent_handle_menu_key (nsevent);
+#endif
+    return FALSE;
+}
+
+static void
+sync_menu_shell (GtkMenuShell *menu_shell, NSMenu *cocoa_menu,
+		 gboolean toplevel, gboolean debug) {
+    GList         *children;
+    GList         *l;
+    int           cocoa_index = 1;
+
+    if (debug)
+	g_printerr ("%s: syncing shell %s (%p)\n", G_STRFUNC, 
+		    get_menu_label_text(GTK_WIDGET(menu_shell), NULL),
+		    menu_shell);
+    cocoa_menu_connect (GTK_WIDGET (menu_shell), cocoa_menu, toplevel);
+    children = gtk_container_get_children (GTK_CONTAINER (menu_shell));
+    for (l = children; l; l = l->next) {
+	GtkWidget      *menu_item = l->data;
+	const gchar *label = get_menu_label_text (menu_item, NULL);
+	if (GTK_IS_TEAROFF_MENU_ITEM (menu_item))
+	    continue;
+	if (toplevel && (g_object_get_data (G_OBJECT (menu_item),
+					    "gtk-empty-menu-item") 
+			 || GTK_IS_SEPARATOR_MENU_ITEM (menu_item)))
+	    continue;
+	printf("%s\n", (char*) label);
+	}
+    for (l = children; l; l = l->next) {
+	GtkWidget      *menu_item = l->data;
+	CocoaMenuItem *cocoa_item;
+	//const gchar *label = get_menu_label_text (menu_item, NULL);
+
+	if (GTK_IS_TEAROFF_MENU_ITEM (menu_item))
+	    continue;
+	if (toplevel && (g_object_get_data (G_OBJECT (menu_item),
+					    "gtk-empty-menu-item") 
+			 || GTK_IS_SEPARATOR_MENU_ITEM (menu_item)))
+	    continue;
+	cocoa_item = cocoa_menu_item_get (menu_item);
+#if 0
+	if (debug)
+	    g_printerr ("%s: cocoa_item %d for menu_item %d (%s, %s)\n",
+			G_STRFUNC, cocoa_item ? [[cocoa_item->menuitem menu] indexOfItem: cocoa_item->menuitem] : -1,
+			cocoa_index, label,
+			g_type_name (G_TYPE_FROM_INSTANCE (menu_item)));
+
+	if (cocoa_item && cocoa_item->index != cocoa_index) {
+	    if (cocoa_item->index == cocoa_index - 1) {
+		if (debug)
+		    g_printerr("%s: %s incrementing index\n", G_STRFUNC, label);
+		++cocoa_item->index;
+	    } 
+	    else if (cocoa_item->index == cocoa_index + 1) {
+		if (debug)
+		    g_printerr("%s: %s decrementing index\n", G_STRFUNC, label);
+		--cocoa_item->index;
+	    } 
+	    else {
+		if (debug)
+		    g_printerr ("%s: %s -> not matching, deleting\n",
+				G_STRFUNC, label);
+		[[cocoa_item->menuitem menu] removeItemAtIndex: cocoa_index];
+		cocoa_item = NULL;
+	    }
+	}
+#endif
+	if (!cocoa_item) {
+	    cocoa_item = cocoa_menu_item_create(menu_item, cocoa_menu,
+						cocoa_index + toplevel, debug);
+	}
+	if (!cocoa_item) //Bad cocoa item, give up
+	    continue;
+	if (!cocoa_item->submenu) {
+	    cocoa_index++;
+	    continue;
+	}
+/*The rest only applies to submenus, not to items which should have
+ * been fixed up in cocoa_menu_item_create
+ */
+	if (!GTK_WIDGET_VISIBLE (menu_item)) {
+#if 0
+	    if (![cocoa_item->submenu isHidden]) {
+		if (debug)
+		    g_printerr("Hiding menu %s\n", label);
+		[cocoa_item->submenu setHidden: YES];
+	    }
+#endif
+	}
+#if 0
+	else if ([cocoa_item->submenu isHidden]) {
+	    if (debug) 
+		g_printerr("Revealing menu %s\n", label);
+		[cocoa_item->submenu setHidden: NO];
+	}
+#endif
+	cocoa_index++;
+    }
+    g_list_free (children);
+}
+
+/*
+ * public functions
+ */
+
+static NSString *
+_get_application_name(void)
+{
+    NSString *appName = nil;
+    NSDictionary *dict;
+
+    dict = (NSDictionary *)CFBundleGetInfoDictionary(CFBundleGetMainBundle());
+    if (dict)
+        appName = [dict objectForKey: @"CFBundleName"];
+    
+    if (![appName length])
+        appName = [[NSProcessInfo processInfo] processName];
+
+    return appName;
+}
+
+static void
+_create_application_menus(void)
+{
+    NSMenu * mainMenu;
+    NSString * applicationName;
+    NSMenu * menu;
+    NSMenuItem *item;
+
+    mainMenu = [[[NSMenu alloc] initWithTitle:@"MainMenu"] autorelease];
+    [NSApp setMainMenu:mainMenu];
+    
+    // The titles of the menu items are for identification purposes only and shouldn't be localized.
+    // The strings in the menu bar come from the submenu titles,
+    // except for the application menu, whose title is ignored at runtime.
+    item = [mainMenu addItemWithTitle:@"Apple" action:NULL keyEquivalent:@""];
+    menu = [[[NSMenu alloc] initWithTitle:@"Apple"] autorelease];
+    [NSApp performSelector:@selector(setAppleMenu:) withObject:menu];
+    [mainMenu setSubmenu:menu forItem:item];
+
+    applicationName = _get_application_name();
+    
+    item = [menu addItemWithTitle:[NSString stringWithFormat:@"%@ %@", NSLocalizedString(@"About", nil), applicationName]
+    					   action:@selector(orderFrontStandardAboutPanel:)
+    				keyEquivalent:@""];
+    [item setTarget:NSApp];
+    
+    [menu addItem:[NSMenuItem separatorItem]];
+    
+    item = [menu addItemWithTitle:NSLocalizedString(@"Services", nil)
+    					   action:NULL
+    				keyEquivalent:@""];
+    NSMenu * servicesMenu = [[[NSMenu alloc] initWithTitle:@"Services"] autorelease];
+    [menu setSubmenu:servicesMenu forItem:item];
+    [NSApp setServicesMenu:servicesMenu];
+    
+    [menu addItem:[NSMenuItem separatorItem]];
+    
+    item = [menu addItemWithTitle:[NSString stringWithFormat:@"%@ %@", NSLocalizedString(@"Hide", nil), applicationName]
+    					   action:@selector(hide:)
+    				keyEquivalent:@"h"];
+    [item setTarget:NSApp];
+    
+    item = [menu addItemWithTitle:NSLocalizedString(@"Hide Others", nil)
+    					   action:@selector(hideOtherApplications:)
+    				keyEquivalent:@"h"];
+    [item setKeyEquivalentModifierMask:NSCommandKeyMask | NSAlternateKeyMask];
+    [item setTarget:NSApp];
+    
+    item = [menu addItemWithTitle:NSLocalizedString(@"Show All", nil)
+    					   action:@selector(unhideAllApplications:)
+    				keyEquivalent:@""];
+    [item setTarget:NSApp];
+    
+    [menu addItem:[NSMenuItem separatorItem]];
+    
+    item = [menu addItemWithTitle:[NSString stringWithFormat:@"%@ %@", NSLocalizedString(@"Quit", nil), applicationName]
+    					   action:@selector(terminate:)
+    				keyEquivalent:@"q"];
+    [item setTarget:NSApp];
+}
+
+void
+ige_mac_menu_set_menu_bar (GtkMenuShell *menu_shell) {
+    CocoaMenu *current_menu;
+    NSMenu *cocoa_menubar;
+    //GtkWidget *parent = gtk_widget_get_toplevel(GTK_WIDGET(menu_shell));
+
+    g_return_if_fail (GTK_IS_MENU_SHELL (menu_shell));
+    if (cocoa_menu_quark == 0)
+	cocoa_menu_quark = g_quark_from_static_string ("CocoaMenu");
+    if (cocoa_menu_item_quark == 0)
+	cocoa_menu_item_quark = g_quark_from_static_string ("CocoaMenuItem");
+    current_menu = cocoa_menu_get (GTK_WIDGET (menu_shell));
+
+    [NSApplication sharedApplication];
+    if ([NSApp mainMenu] == nil)
+	_create_application_menus();
+    [NSApp finishLaunching];
+
+    cocoa_menubar = [NSApp mainMenu];
+    //setup_menu_event_handler ();
+#if 0
+    if (emission_hook_id == 0) {
+	emission_hook_id =
+	    g_signal_add_emission_hook(
+		g_signal_lookup("parent-set", GTK_TYPE_WIDGET), 0,
+		parent_set_emission_hook, NULL, NULL);
+    }
+    emission_hook_count++;
+    g_signal_connect (menu_shell, "destroy",
+		      G_CALLBACK (parent_set_emission_hook_remove), NULL);
+#endif
+    
+
+#if DEBUG_SET
+    g_printerr ("%s: syncing menubar\n", G_STRFUNC);
+#endif
+    sync_menu_shell (menu_shell, cocoa_menubar, TRUE, DEBUG_SET);
+}
+
+void
+ige_mac_menu_set_quit_menu_item (GtkMenuItem *menu_item) {
+    CocoaMenuItem *cocoa_item = cocoa_menu_item_get (GTK_WIDGET (menu_item));
+    
+    g_return_if_fail (GTK_IS_MENU_ITEM (menu_item));
+    //setup_menu_event_handler ();
+    [[cocoa_item->menuitem menu] removeItem: cocoa_item->menuitem];
+    gtk_widget_hide (GTK_WIDGET (menu_item));
+    return;
+}
+
+void
+ige_mac_menu_connect_window_key_handler (GtkWindow *window) {
+    if (g_object_get_data (G_OBJECT (window), IGE_MAC_KEY_HANDLER)) {
+	g_warning ("Window %p is already connected", window);
+	return;
+    }
+
+#if 0
+    g_signal_connect (window, "key-press-event", 
+		      G_CALLBACK (key_press_event), NULL);
+    g_object_set_data (G_OBJECT (window), IGE_MAC_KEY_HANDLER, 
+		       GINT_TO_POINTER (1));
+#endif
+}
+
+/* Most applications will want to have this enabled (which is the
+ * defalt). For apps that need to deal with the events themselves, the
+ * global handling can be disabled.
+ */
+void
+ige_mac_menu_set_global_key_handler_enabled (gboolean enabled) {
+    global_key_handler_enabled = enabled;
+}
+
+struct _IgeMacMenuGroup {
+    GList *items;
+};
+
+static GList *app_menu_groups = NULL;
+
+IgeMacMenuGroup *
+ige_mac_menu_add_app_menu_group (void) {
+    IgeMacMenuGroup *group = g_slice_new0 (IgeMacMenuGroup);
+
+    app_menu_groups = g_list_append (app_menu_groups, group);
+    return group;
+}
+
+void
+ige_mac_menu_add_app_menu_item (IgeMacMenuGroup *group, GtkMenuItem *menu_item,
+				const gchar *label) {
+    CocoaMenuItem *cocoa_item = cocoa_menu_item_get (GTK_WIDGET (menu_item));
+
+    NSMenu  *appmenu;
+    NSMenuItem *item;
+    GList   *list;
+    gint     index = 0;
+    NSString *nsstr;
+
+    g_return_if_fail (group != NULL);
+    g_return_if_fail (GTK_IS_MENU_ITEM (menu_item));
+    //setup_menu_event_handler ();
+    
+    appmenu = [NSApp mainMenu];
+    for (list = app_menu_groups; list; list = g_list_next (list)) {
+	IgeMacMenuGroup *list_group = list->data;
+
+	index += g_list_length (list_group->items);
+	/*  adjust index for the separator between groups, but not
+	 *  before the first group
+	 */
+	if (list_group->items && list->prev)
+	    index++;
+	if (group != list_group) 
+	    continue;
+
+	/*  add a separator before adding the first item, but not
+	 *  for the first group
+	 */
+	if (!group->items && list->prev) {
+	    [appmenu addItem: [NSMenuItem separatorItem]];
+	    index++;
+	}
+	if (!label)
+	    label = get_menu_label_text (GTK_WIDGET (menu_item), NULL);
+	nsstr = [NSString stringWithUTF8String: label];
+	item = [[NSMenuItem alloc] initWithTitle: nsstr
+	        action:NULL keyEquivalent:@""];
+        [appmenu addItem: item];
+#if 0
+	err = SetMenuItemProperty (appmenu, index + 1,
+				   IGE_QUARTZ_MENU_CREATOR,
+				   IGE_QUARTZ_ITEM_WIDGET,
+				   sizeof (menu_item), &menu_item);
+#endif
+        if (nsstr)
+            [nsstr release];
+	cocoa_menu_nil_return_label(item, label, "Failed to associate Gtk Widget");
+        [[cocoa_item->menuitem menu] removeItem: cocoa_item->menuitem];
+	gtk_widget_hide (GTK_WIDGET (menu_item));
+	group->items = g_list_append (group->items, menu_item);
+	return;
+
+    }
+    if (!list)
+	g_warning ("%s: app menu group %p does not exist", G_STRFUNC, group);
+}
+
+void
+ige_mac_menu_sync(GtkMenuShell *menu_shell) {
+    CocoaMenu *cocoa_menu = cocoa_menu_get (GTK_WIDGET(menu_shell));
+
+#if DEBUG_SYNC
+    g_printerr ("%s: syncing menubar\n", G_STRFUNC);
+#endif
+    sync_menu_shell (menu_shell, cocoa_menu->menu,
+		     cocoa_menu->toplevel, DEBUG_SYNC);
+
+(void) accel_find_func;
+}
+#endif
