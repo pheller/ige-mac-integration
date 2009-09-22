@@ -33,7 +33,13 @@
 */
 
 #include <config.h>
+#include <ApplicationServices/ApplicationServices.h>
+#ifdef USE_CARBON
 #include <Carbon/Carbon.h>
+#endif
+#ifdef USE_COCOA
+#import <Cocoa/Cocoa.h>
+#endif
 #include <sys/param.h>
 #include <gtk/gtk.h>
 
@@ -58,6 +64,7 @@ struct IgeMacDockPriv {
 };
 
 static void  mac_dock_finalize                  (GObject          *object);
+#ifdef USE_CARBON
 static OSErr mac_dock_handle_quit               (const AppleEvent *inAppleEvent,
                                                  AppleEvent       *outAppleEvent,
                                                  long              inHandlerRefcon);
@@ -70,6 +77,7 @@ static OSErr mac_dock_handle_open_application   (const AppleEvent *inAppleEvent,
 static OSErr mac_dock_handle_reopen_application (const AppleEvent *inAppleEvent,
                                                  AppleEvent       *outAppleEvent,
                                                  long              inHandlerRefcon);
+#endif
 
 G_DEFINE_TYPE (IgeMacDock, ige_mac_dock, G_TYPE_OBJECT)
 
@@ -115,6 +123,7 @@ ige_mac_dock_class_init (IgeMacDockClass *class)
 
   g_type_class_add_private (object_class, sizeof (IgeMacDockPriv));
 
+#ifdef USE_CARBON
   /* FIXME: Just testing with triggering Carbon to take control over
    * the dock menu events instead of Cocoa (which happens when the
    * sharedApplication is created) to get custom dock menu working
@@ -130,6 +139,7 @@ ige_mac_dock_class_init (IgeMacDockClass *class)
                     kEventDurationNoWait, false, 
                     &event);
 #endif
+#endif /* USE_CARBON */
 }
 
 static void
@@ -142,6 +152,7 @@ ige_mac_dock_init (IgeMacDock *dock)
 
   handlers = g_list_prepend (handlers, dock);
 
+#ifdef USE_CARBON
   AEInstallEventHandler (kCoreEventClass, kAEQuitApplication, 
                          mac_dock_handle_quit,
                          priv->id, true);
@@ -154,6 +165,7 @@ ige_mac_dock_init (IgeMacDock *dock)
   AEInstallEventHandler (kCoreEventClass, kAEOpenDocuments,
                          mac_dock_handle_open_documents,
                          priv->id, true);
+#endif
 }
 
 static void
@@ -163,6 +175,7 @@ mac_dock_finalize (GObject *object)
 
   priv = GET_PRIV (object);
 
+#ifdef USE_CARBON
   AERemoveEventHandler (kCoreEventClass, kAEQuitApplication,
                         mac_dock_handle_quit, false);
   AERemoveEventHandler (kCoreEventClass, kAEReopenApplication,
@@ -171,6 +184,7 @@ mac_dock_finalize (GObject *object)
                         mac_dock_handle_open_application, false);
   AERemoveEventHandler (kCoreEventClass, kAEOpenDocuments,
                         mac_dock_handle_open_documents, false);
+#endif
 
   handlers = g_list_remove (handlers, object);
 
@@ -201,6 +215,7 @@ _ige_mac_dock_is_quit_menu_item_handled (void)
   return handlers != NULL;
 }
 
+#ifdef USE_CARBON
 static IgeMacDock *
 mac_dock_get_from_id (gulong id)
 {
@@ -462,3 +477,250 @@ ige_mac_attention_type_get_type (void)
   /* FIXME */
   return 0;
 }
+#else /* USE_COCOA */
+
+#include <AvailabilityMacros.h>
+
+static NSImage* _NSImageFromCGImage(CGImageRef image)
+{
+    NSImage* newImage = nil;
+#if MAC_OS_X_VERSION_MIN_REQUIRED > MAC_OS_X_VERSION_10_4 /* 10_5_AND_LATER */
+    NSBitmapImageRep *bitmapRep = [[NSBitmapImageRep alloc] initWithCGImage:image];
+
+    newImage = [[NSImage alloc] init];
+    [newImage addRepresentation:bitmapRep];
+    [bitmapRep release];
+#else
+    NSRect imageRect = NSMakeRect(0.0, 0.0, 0.0, 0.0);
+    CGContextRef imageContext = nil;
+    imageRect.size.height = CGImageGetHeight(image);
+    imageRect.size.width = CGImageGetWidth(image);
+ 
+    newImage = [[[NSImage alloc] initWithSize:imageRect.size] autorelease];
+    [newImage lockFocus];
+    imageContext = (CGContextRef)[[NSGraphicsContext currentContext] graphicsPort];
+    CGContextDrawImage(imageContext, *(CGRect*)&imageRect, image);
+    [newImage unlockFocus];
+#endif
+     return newImage;
+}
+
+void
+ige_mac_dock_set_icon_from_pixbuf (IgeMacDock *dock,
+                                   GdkPixbuf  *pixbuf)
+{
+  if (!pixbuf)
+    [NSApp setApplicationIconImage: nil];
+  else
+    {
+      CGImageRef image;
+
+      image = ige_mac_image_from_pixbuf (pixbuf);
+      [NSApp setApplicationIconImage: _NSImageFromCGImage(image)];
+      CGImageRelease (image);
+    }
+}
+
+void
+ige_mac_dock_set_icon_from_resource (IgeMacDock   *dock,
+                                     IgeMacBundle *bundle,
+                                     const gchar  *name,
+                                     const gchar  *type,
+                                     const gchar  *subdir)
+{
+  gchar *path;
+
+  g_return_if_fail (IGE_IS_MAC_DOCK (dock));
+  g_return_if_fail (name != NULL);
+
+  path = ige_mac_bundle_get_resource_path (bundle, name, type, subdir);
+  if (path)
+    {
+      GdkPixbuf *pixbuf;
+
+      pixbuf = gdk_pixbuf_new_from_file (path, NULL);
+      if (pixbuf)
+        {
+          ige_mac_dock_set_icon_from_pixbuf (dock, pixbuf);
+          g_object_unref (pixbuf);
+        }
+
+      g_free (path);
+    }
+}
+
+#if MAC_OS_X_VERSION_MIN_REQUIRED <= MAC_OS_X_VERSION_10_4
+/* TODO: load these at runtime, instead of linking */
+
+extern OSStatus OverlayApplicationDockTileImage(CGImageRef inImage);
+extern OSStatus RestoreApplicationDockTileImage(void);
+#endif
+
+void
+ige_mac_dock_set_overlay_from_pixbuf (IgeMacDock  *dock,
+                                      GdkPixbuf   *pixbuf)
+{
+  CGImageRef image;
+
+  g_return_if_fail (IGE_IS_MAC_DOCK (dock));
+  g_return_if_fail (pixbuf == NULL || GDK_IS_PIXBUF (pixbuf));
+
+#if MAC_OS_X_VERSION_MIN_REQUIRED > MAC_OS_X_VERSION_10_4 /* 10_5_AND_LATER */
+  if (pixbuf)
+    {
+      NSDockTile* dockTile = [NSApp dockTile];
+      NSRect frame = NSMakeRect(0, 0, dockTile.size.width, dockTile.size.height);
+      NSImageView* dockImageView = [[NSImageView alloc] initWithFrame: frame];
+      image = ige_mac_image_from_pixbuf (pixbuf);
+      [dockImageView setImage: _NSImageFromCGImage(image)];
+      [dockTile setContentView: dockImageView];
+      [dockTile display];
+      CGImageRelease (image);
+    }
+  else
+    {
+      NSDockTile* dockTile = [NSApp dockTile];
+      [dockTile setContentView: nil]; /* XXXX */
+      [dockTile display];
+    }
+#else /* need to use Carbon on earlier Mac OS X */
+  if (pixbuf)
+    {
+      image = ige_mac_image_from_pixbuf (pixbuf);
+      OverlayApplicationDockTileImage (image);
+      CGImageRelease (image);
+    }
+  else
+    RestoreApplicationDockTileImage ();
+#endif
+}
+
+void
+ige_mac_dock_set_overlay_from_resource (IgeMacDock   *dock,
+                                        IgeMacBundle *bundle,
+                                        const gchar  *name,
+                                        const gchar  *type,
+                                        const gchar  *subdir)
+{
+  gchar *path;
+
+  g_return_if_fail (IGE_IS_MAC_DOCK (dock));
+  g_return_if_fail (name != NULL);
+
+  path = ige_mac_bundle_get_resource_path (bundle, name, type, subdir);
+  if (path)
+    {
+      GdkPixbuf *pixbuf;
+
+      pixbuf = gdk_pixbuf_new_from_file (path, NULL);
+      if (pixbuf)
+        {
+          ige_mac_dock_set_overlay_from_pixbuf (dock, pixbuf);
+          g_object_unref (pixbuf);
+        }
+
+      g_free (path);
+    }
+}
+
+#define USE_CFUSERNOTIFICATION	0
+
+struct _IgeMacAttentionRequest {
+#if USE_CFUSERNOTIFICATION
+  CFUserNotificationRef un_ref;
+#else
+  int identifier;
+#endif
+  guint    timeout_id;
+  gboolean is_cancelled;
+};
+
+static gboolean
+mac_dock_attention_cb (IgeMacAttentionRequest *request)
+{
+  request->timeout_id = 0;
+  request->is_cancelled = TRUE;
+
+#if USE_CFUSERNOTIFICATION
+  CFUserNotificationCancel(request->un_ref);
+#else
+  [NSApp cancelUserAttentionRequest: request->identifier];
+#endif
+  
+  return FALSE;
+}
+
+IgeMacAttentionRequest *
+ige_mac_dock_attention_request (IgeMacDock          *dock,
+                                IgeMacAttentionType  type)
+{
+  IgeMacAttentionRequest *request;
+#if USE_CFUSERNOTIFICATION
+  CFMutableDictionaryRef elements;
+  CFOptionFlags flags;
+  SInt32 error;
+#else
+  NSRequestUserAttentionType requestType;
+#endif
+  
+  request = g_new0 (IgeMacAttentionRequest, 1);
+
+#if USE_CFUSERNOTIFICATION
+  if (type == IGE_MAC_ATTENTION_INFO)
+    flags = kCFUserNotificationPlainAlertLevel | kCFUserNotificationNoDefaultButtonFlag;
+  else /* IGE_MAC_ATTENTION_CRITICAL */
+    flags = kCFUserNotificationStopAlertLevel;
+
+  elements = CFDictionaryCreateMutable(kCFAllocatorDefault, 1,
+      /* keyCallBacks */ NULL, /* valueCallBacks */ NULL);
+  if (elements == NULL)
+    {
+      return NULL;
+    }
+
+  CFDictionaryAddValue(elements, kCFUserNotificationAlertHeaderKey, CFSTR(""));
+
+  request->un_ref = CFUserNotificationCreate(kCFAllocatorDefault,
+      0, flags, &error, elements);
+  if (error != noErr)
+    {
+      g_free (request);
+      return NULL;
+    }
+
+  CFRelease(elements);
+#else
+  if (type == IGE_MAC_ATTENTION_INFO)
+    requestType = NSInformationalRequest;
+  else /* IGE_MAC_ATTENTION_CRITICAL */
+    requestType = NSCriticalRequest;
+
+  request->identifier = [NSApp requestUserAttention:requestType];
+#endif
+
+  if (type == IGE_MAC_ATTENTION_INFO)
+    request->timeout_id = gdk_threads_add_timeout (
+            1000,
+            (GSourceFunc) mac_dock_attention_cb,
+            request);
+
+  return request;
+}
+
+void
+ige_mac_dock_attention_cancel (IgeMacDock             *dock,
+                               IgeMacAttentionRequest *request)
+{
+  if (request->timeout_id)
+    g_source_remove (request->timeout_id);
+
+  if (!request->is_cancelled)
+#if USE_CFUSERNOTIFICATION
+    CFUserNotificationCancel(request->un_ref);
+#else
+    [NSApp cancelUserAttentionRequest: request->identifier];
+#endif
+
+  g_free (request);
+}
+#endif
