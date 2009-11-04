@@ -23,15 +23,22 @@ IMENDIO_PYTHON_CHECK
 
 PKG_CHECK_MODULES(MAC, [gtk+-2.0 >= 2.13])
 
-if false; then
+AC_ARG_WITH(toolkit, [  --with-toolkit=[[cocoa/carbon]] select which toolkit to build against], toolkit=$with_toolkit, toolkit=cocoa)
+AC_SUBST(toolkit)
+case $toolkit in
+     cocoa|carbon) ;;
+     *) AC_MSG_ERROR([Invalid toolkit: Use cocoa or carbon])
+esac
+
+if test "x$toolkit" = "xcarbon"; then
   AC_DEFINE(USE_CARBON, 1, [Define to 1 when using Carbon framework])
-  WITH_CARBON_FRAMEWORK='-framework Carbon'
+  OSX_FRAMEWORK='-framework Carbon'
 else
   AC_DEFINE(USE_COCOA, 1, [Define to 1 when using Cocoa framework])
-  WITH_COCOA_FRAMEWORK='-framework Cocoa'
+  OSX_FRAMEWORK='-framework Cocoa'
 fi
-AC_SUBST(WITH_CARBON_FRAMEWORK)
-AC_SUBST(WITH_COCOA_FRAMEWORK)
+
+AC_SUBST(OSX_FRAMEWORK)
 
 # This will cause the automake generated makefiles to pass the correct
 # flags to aclocal.

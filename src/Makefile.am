@@ -13,9 +13,7 @@ libigemacintegration_la_SOURCES =			\
 
 libigemacintegration_la_CFLAGS = $(MAC_CFLAGS) -xobjective-c
 libigemacintegration_la_LIBADD =  $(MAC_LIBS) -lobjc
-libigemacintegration_la_LDFLAGS = -framework ApplicationServices
-libigemacintegration_la_LDFLAGS += @WITH_CARBON_FRAMEWORK@
-libigemacintegration_la_LDFLAGS += @WITH_COCOA_FRAMEWORK@
+libigemacintegration_la_LDFLAGS = -framework ApplicationServices @OSX_FRAMEWORK@
 
 integration_includedir = $(includedir)/igemacintegration
 integration_include_HEADERS =				\
