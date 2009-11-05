@@ -39,6 +39,7 @@
 #endif
 #ifdef USE_COCOA
 #import <Cocoa/Cocoa.h>
+#include <AvailabilityMacros.h>
 #endif
 #include <sys/param.h>
 #include <gtk/gtk.h>
@@ -320,166 +321,7 @@ mac_dock_handle_open_documents (const AppleEvent *inAppleEvent,
     return status;
 }
 
-void
-ige_mac_dock_set_icon_from_pixbuf (IgeMacDock *dock,
-                                   GdkPixbuf  *pixbuf)
-{
-  if (!pixbuf)
-    RestoreApplicationDockTileImage ();
-  else
-    {
-      CGImageRef image;
-
-      image = ige_mac_image_from_pixbuf (pixbuf);
-      SetApplicationDockTileImage (image);
-      CGImageRelease (image);
-    }
-}
-
-void
-ige_mac_dock_set_icon_from_resource (IgeMacDock   *dock,
-                                     IgeMacBundle *bundle,
-                                     const gchar  *name,
-                                     const gchar  *type,
-                                     const gchar  *subdir)
-{
-  gchar *path;
-
-  g_return_if_fail (IGE_IS_MAC_DOCK (dock));
-  g_return_if_fail (name != NULL);
-
-  path = ige_mac_bundle_get_resource_path (bundle, name, type, subdir);
-  if (path)
-    {
-      GdkPixbuf *pixbuf;
-
-      pixbuf = gdk_pixbuf_new_from_file (path, NULL);
-      if (pixbuf)
-        {
-          ige_mac_dock_set_icon_from_pixbuf (dock, pixbuf);
-          g_object_unref (pixbuf);
-        }
-
-      g_free (path);
-    }
-}
-
-void
-ige_mac_dock_set_overlay_from_pixbuf (IgeMacDock  *dock,
-                                      GdkPixbuf   *pixbuf)
-{
-  CGImageRef image;
-
-  g_return_if_fail (IGE_IS_MAC_DOCK (dock));
-  g_return_if_fail (pixbuf == NULL || GDK_IS_PIXBUF (pixbuf));
-
-  if (pixbuf)
-    {
-      image = ige_mac_image_from_pixbuf (pixbuf);
-      OverlayApplicationDockTileImage (image);
-      CGImageRelease (image);
-    }
-  else
-    RestoreApplicationDockTileImage ();
-}
-
-void
-ige_mac_dock_set_overlay_from_resource (IgeMacDock   *dock,
-                                        IgeMacBundle *bundle,
-                                        const gchar  *name,
-                                        const gchar  *type,
-                                        const gchar  *subdir)
-{
-  gchar *path;
-
-  g_return_if_fail (IGE_IS_MAC_DOCK (dock));
-  g_return_if_fail (name != NULL);
-
-  path = ige_mac_bundle_get_resource_path (bundle, name, type, subdir);
-  if (path)
-    {
-      GdkPixbuf *pixbuf;
-
-      pixbuf = gdk_pixbuf_new_from_file (path, NULL);
-      if (pixbuf)
-        {
-          ige_mac_dock_set_overlay_from_pixbuf (dock, pixbuf);
-          g_object_unref (pixbuf);
-        }
-
-      g_free (path);
-    }
-}
-
-struct _IgeMacAttentionRequest {
-  NMRec    nm_request;
-  guint    timeout_id;
-  gboolean is_cancelled;
-};
-
-static gboolean
-mac_dock_attention_cb (IgeMacAttentionRequest *request)
-{
-  request->timeout_id = 0;
-  request->is_cancelled = TRUE;
-
-  NMRemove (&request->nm_request);
-
-  return FALSE;
-}
-
-
-/* FIXME: Add listener for "application activated" and cancel any
- * requests.
- */
-IgeMacAttentionRequest *
-ige_mac_dock_attention_request (IgeMacDock          *dock,
-                                IgeMacAttentionType  type)
-{
-  IgeMacAttentionRequest *request;
-
-  request = g_new0 (IgeMacAttentionRequest, 1);
-
-  request->nm_request.nmMark = 1;
-  request->nm_request.qType = nmType;
-  
-  if (NMInstall (&request->nm_request) != noErr)
-    {
-      g_free (request);
-      return NULL;
-    }
-
-  if (type == IGE_MAC_ATTENTION_INFO)
-    request->timeout_id = gdk_threads_add_timeout (
-            1000,
-            (GSourceFunc) mac_dock_attention_cb,
-            request);
-
-  return request;
-}
-
-void
-ige_mac_dock_attention_cancel (IgeMacDock             *dock,
-                               IgeMacAttentionRequest *request)
-{
-  if (request->timeout_id)
-    g_source_remove (request->timeout_id);
-
-  if (!request->is_cancelled)
-    NMRemove (&request->nm_request);
-
-  g_free (request);
-}
-
-GType
-ige_mac_attention_type_get_type (void)
-{
-  /* FIXME */
-  return 0;
-}
-#else /* USE_COCOA */
-
-#include <AvailabilityMacros.h>
+#else //USE_COCOA
 
 static NSImage* _NSImageFromCGImage(CGImageRef image)
 {
@@ -501,22 +343,35 @@ static NSImage* _NSImageFromCGImage(CGImageRef image)
     imageContext = (CGContextRef)[[NSGraphicsContext currentContext] graphicsPort];
     CGContextDrawImage(imageContext, *(CGRect*)&imageRect, image);
     [newImage unlockFocus];
-#endif
+#endif //MAC_OS_X_VERSION_MIN > 10_4
      return newImage;
 }
+#endif //USE CARBON|COCOA
+
+/*
+ * Exported Functions
+ */
 
 void
 ige_mac_dock_set_icon_from_pixbuf (IgeMacDock *dock,
                                    GdkPixbuf  *pixbuf)
 {
   if (!pixbuf)
+#ifdef USE_CARBON
+    RestoreApplicationDockTileImage ();
+#else //USE_COCOA
     [NSApp setApplicationIconImage: nil];
+#endif
   else
     {
       CGImageRef image;
 
       image = ige_mac_image_from_pixbuf (pixbuf);
+#ifdef USE_CARBON
+      SetApplicationDockTileImage (image);
+#else //USE_COCOA
       [NSApp setApplicationIconImage: _NSImageFromCGImage(image)];
+#endif
       CGImageRelease (image);
     }
 }
@@ -549,7 +404,7 @@ ige_mac_dock_set_icon_from_resource (IgeMacDock   *dock,
     }
 }
 
-#if MAC_OS_X_VERSION_MIN_REQUIRED <= MAC_OS_X_VERSION_10_4
+#if defined USE_COCOA && MAC_OS_X_VERSION_MIN_REQUIRED <= MAC_OS_X_VERSION_10_4
 /* TODO: load these at runtime, instead of linking */
 
 extern OSStatus OverlayApplicationDockTileImage(CGImageRef inImage);
@@ -565,7 +420,7 @@ ige_mac_dock_set_overlay_from_pixbuf (IgeMacDock  *dock,
   g_return_if_fail (IGE_IS_MAC_DOCK (dock));
   g_return_if_fail (pixbuf == NULL || GDK_IS_PIXBUF (pixbuf));
 
-#if MAC_OS_X_VERSION_MIN_REQUIRED > MAC_OS_X_VERSION_10_4 /* 10_5_AND_LATER */
+#if defined USE_COCOA && MAC_OS_X_VERSION_MIN_REQUIRED > MAC_OS_X_VERSION_10_4 /* 10_5_AND_LATER */
   if (pixbuf)
     {
       NSDockTile* dockTile = [NSApp dockTile];
@@ -623,13 +478,18 @@ ige_mac_dock_set_overlay_from_resource (IgeMacDock   *dock,
     }
 }
 
+#ifdef USE_COCOA
 #define USE_CFUSERNOTIFICATION	0
-
+#endif
 struct _IgeMacAttentionRequest {
+#ifdef USE_CARBON
+  NMRec    nm_request;
+#else //USE_COCOA
 #if USE_CFUSERNOTIFICATION
   CFUserNotificationRef un_ref;
 #else
   int identifier;
+#endif
 #endif
   guint    timeout_id;
   gboolean is_cancelled;
@@ -641,20 +501,28 @@ mac_dock_attention_cb (IgeMacAttentionRequest *request)
   request->timeout_id = 0;
   request->is_cancelled = TRUE;
 
+#ifdef USE_CARBON
+  NMRemove (&request->nm_request);
+#else //USE_COCOA
 #if USE_CFUSERNOTIFICATION
   CFUserNotificationCancel(request->un_ref);
 #else
   [NSApp cancelUserAttentionRequest: request->identifier];
 #endif
-  
+#endif
   return FALSE;
 }
 
+
+/* FIXME: Add listener for "application activated" and cancel any
+ * requests.
+ */
 IgeMacAttentionRequest *
 ige_mac_dock_attention_request (IgeMacDock          *dock,
                                 IgeMacAttentionType  type)
 {
   IgeMacAttentionRequest *request;
+#ifdef USE_COCOA
 #if USE_CFUSERNOTIFICATION
   CFMutableDictionaryRef elements;
   CFOptionFlags flags;
@@ -662,9 +530,19 @@ ige_mac_dock_attention_request (IgeMacDock          *dock,
 #else
   NSRequestUserAttentionType requestType;
 #endif
-  
+#endif
   request = g_new0 (IgeMacAttentionRequest, 1);
 
+#ifdef USE_CARBON
+  request->nm_request.nmMark = 1;
+  request->nm_request.qType = nmType;
+  
+  if (NMInstall (&request->nm_request) != noErr)
+    {
+      g_free (request);
+      return NULL;
+    }
+#else //USE_COCOA
 #if USE_CFUSERNOTIFICATION
   if (type == IGE_MAC_ATTENTION_INFO)
     flags = kCFUserNotificationPlainAlertLevel | kCFUserNotificationNoDefaultButtonFlag;
@@ -697,7 +575,7 @@ ige_mac_dock_attention_request (IgeMacDock          *dock,
 
   request->identifier = [NSApp requestUserAttention:requestType];
 #endif
-
+#endif
   if (type == IGE_MAC_ATTENTION_INFO)
     request->timeout_id = gdk_threads_add_timeout (
             1000,
@@ -714,13 +592,22 @@ ige_mac_dock_attention_cancel (IgeMacDock             *dock,
   if (request->timeout_id)
     g_source_remove (request->timeout_id);
 
+#ifdef USE_CARBON
   if (!request->is_cancelled)
+    NMRemove (&request->nm_request);
+#else //USE_COCOA
 #if USE_CFUSERNOTIFICATION
     CFUserNotificationCancel(request->un_ref);
 #else
     [NSApp cancelUserAttentionRequest: request->identifier];
 #endif
-
+#endif
   g_free (request);
 }
-#endif
+
+GType
+ige_mac_attention_type_get_type (void)
+{
+  /* FIXME */
+  return 0;
+}
