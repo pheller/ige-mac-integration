@@ -56,30 +56,30 @@ typedef enum {
         IGE_MAC_ATTENTION_INFO
 } IgeMacAttentionType;
 
-GType                   ige_mac_dock_get_type                  (void);
-IgeMacDock *            ige_mac_dock_new                       (void);
-IgeMacDock *            ige_mac_dock_get_default               (void);
-void                    ige_mac_dock_set_icon_from_pixbuf      (IgeMacDock             *dock,
-                                                                GdkPixbuf              *pixbuf);
-void                    ige_mac_dock_set_icon_from_resource    (IgeMacDock             *dock,
-                                                                IgeMacBundle           *bundle,
-                                                                const gchar            *name,
-                                                                const gchar            *type,
-                                                                const gchar            *subdir);
-void                    ige_mac_dock_set_overlay_from_pixbuf   (IgeMacDock             *dock,
-                                                                GdkPixbuf              *pixbuf);
-void                    ige_mac_dock_set_overlay_from_resource (IgeMacDock             *dock,
-                                                                IgeMacBundle           *bundle,
-                                                                const gchar            *name,
-                                                                const gchar            *type,
-                                                                const gchar            *subdir);
-IgeMacAttentionRequest *ige_mac_dock_attention_request         (IgeMacDock             *dock,
-                                                                IgeMacAttentionType     type);
-void                    ige_mac_dock_attention_cancel          (IgeMacDock             *dock,
-                                                                IgeMacAttentionRequest *request);
+GType         ige_mac_dock_get_type                  (void);
+IgeMacDock *  ige_mac_dock_new                       (void);
+IgeMacDock *  ige_mac_dock_get_default               (void);
+void          ige_mac_dock_set_icon_from_pixbuf      (IgeMacDock   *dock,
+						      GdkPixbuf *pixbuf);
+void ige_mac_dock_set_icon_from_resource    (IgeMacDock *dock,
+					     IgeMacBundle *bundle,
+					     const gchar            *name,
+					     const gchar            *type,
+					     const gchar            *subdir);
+void ige_mac_dock_set_overlay_from_pixbuf   (IgeMacDock             *dock,
+					     GdkPixbuf              *pixbuf);
+void ige_mac_dock_set_overlay_from_resource (IgeMacDock             *dock,
+					     IgeMacBundle           *bundle,
+					     const gchar            *name,
+					     const gchar            *type,
+					     const gchar            *subdir);
+IgeMacAttentionRequest *ige_mac_dock_attention_request (IgeMacDock *dock,
+							IgeMacAttentionType type);
+void ige_mac_dock_attention_cancel          (IgeMacDock             *dock,
+					     IgeMacAttentionRequest *request);
 
 #define IGE_TYPE_MAC_ATTENTION_TYPE (ige_mac_attention_type_get_type())
-GType                   ige_mac_attention_type_get_type        (void);
+GType ige_mac_attention_type_get_type        (void);
 
 G_END_DECLS
 
