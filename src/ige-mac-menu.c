@@ -27,6 +27,8 @@
 #include <gtk/gtk.h>
 #include <gdk/gdkkeysyms.h>
 #include <gdk/gdkquartz.h>
+#include <glib.h>
+
 #include <ApplicationServices/ApplicationServices.h>
 #ifdef USE_CARBON
 #include <Carbon/Carbon.h>
@@ -845,6 +847,159 @@ activate_idle_cb (gpointer user_data) {
     return FALSE;
 }
 #endif //Not used in Cocoa
+static GList *app_menu_groups = NULL;
+
+#ifdef USE_COCOA
+static GQuark cocoa_target_quark = 0;
+
+@class CocoaTarget;
+@interface CocoaTarget : NSObject {
+    @private
+	GtkMenu *gtk_menu;
+	GData   *menuActions;
+}
+
+-(CocoaTarget *) init: (GtkMenu *)menu;
+-(void) addAction: (NSMenuItem *)ns_item with:(GtkMenuItem *)gtk_item;
+-(void) setAction: (NSMenuItem *)ns_item;
+-(void) resync;
+-(void) handle: (NSMenuItem *)ns_item;
+@end
+
+static void
+cocoa_target_set_action(GQuark item_id, GtkMenuItem *gtk_item, 
+			gpointer target) {
+    GtkMenu *menu = GTK_MENU(gtk_widget_get_parent(GTK_WIDGET (gtk_item)));
+    NSMenuItem* ns_item = g_object_get_qdata(G_OBJECT (menu), 
+					     cocoa_target_quark);
+    [(CocoaTarget *)target setAction:ns_item];
+}
+
+@implementation CocoaTarget
+-(CocoaTarget *) init: (GtkMenu*)menu {
+    [super init];
+    gtk_menu = menu;
+    g_datalist_init(&menuActions);
+    return self;
+}
+
+-(void) addAction: (NSMenuItem *)ns_item with:(GtkMenuItem *)gtk_item {
+    const gchar *ns_item_title = [[ns_item title] UTF8String];
+    printf("%s %s\n", G_STRFUNC, ns_item_title);
+
+    gtk_widget_reparent (GTK_WIDGET (gtk_item), GTK_WIDGET (gtk_menu));
+    g_datalist_set_data(&menuActions, ns_item_title, gtk_item);
+    [self setAction:ns_item];
+}
+
+-(void) setAction: (NSMenuItem *)ns_item {
+    [ns_item setTarget:self];
+    [ns_item setAction:@selector(handle)];
+}
+
+-(void) resync {
+	g_datalist_foreach(&menuActions, 
+			   (GDataForeachFunc)cocoa_target_set_action, self);
+}
+    
+-(void) handle: (NSMenuItem *)ns_item {
+    const gchar *ns_item_title = [[ns_item title] UTF8String];
+    GtkWidget *gtk_item = g_datalist_get_data(&menuActions, ns_item_title);
+    ActivateIdleData *idleData;
+    idleData = g_new0 (ActivateIdleData, 1);
+    idleData->widget = gtk_item;
+    g_object_add_weak_pointer (G_OBJECT (gtk_item), 
+			       (gpointer) &idleData->widget);
+    g_idle_add_full (G_PRIORITY_HIGH, activate_idle_cb,
+		     idleData, activate_destroy_cb);
+
+}
+@end
+
+static void
+cocoa_target_unref(CocoaTarget *target) {
+    [target release];
+}
+
+static GtkWidget *current_focussed_window = NULL;
+
+static gint 
+app_menu_group_last_index(IgeMacMenuGroup *group) {
+        GList   *list;
+	gint index = 0;
+    for (list = app_menu_groups; list; list = g_list_next (list)) {
+	IgeMacMenuGroup *list_group = list->data;
+
+	index += g_list_length (list_group->items);
+	/*  adjust index for the separator between groups, but not
+	 *  before the first group
+	 */
+	if (list_group->items && list->prev)
+	    index++;
+	if (group == list_group) 
+	    break;
+    }
+    return index;
+}
+
+static CocoaTarget*
+cocoa_target_create(GtkWidget *toplevel) {
+    GtkWidget* menu = gtk_menu_new();
+    CocoaTarget *target = [[CocoaTarget alloc] init:GTK_MENU (menu)];
+ 
+    gtk_widget_hide(menu);
+
+    if (cocoa_target_quark  == 0)
+	cocoa_target_quark = g_quark_from_static_string("CocoaTarget");
+    g_object_set_qdata_full (G_OBJECT (menu), cocoa_target_quark,
+			     target,
+			     (GDestroyNotify)cocoa_target_unref);
+    g_object_set_qdata (G_OBJECT(toplevel), cocoa_target_quark, target);
+    return target;
+}
+
+
+static gboolean
+app_menu_take_item(GtkMenuItem *menu_item, gint position, const gchar *label) {
+
+    NSMenu *menu = [[[[NSApplication sharedApplication] mainMenu] itemAtIndex:0] submenu];
+    NSString *itemTitle;
+    NSMenuItem *cocoaMenuItem = [menu itemWithTitle:itemTitle];
+    //OOPS! menus don't have targets!
+    CocoaTarget *target = g_object_get_qdata(G_OBJECT (current_focussed_window),
+					     cocoa_target_quark);
+    gboolean new_item = FALSE;
+
+    g_return_val_if_fail (GTK_IS_MENU_ITEM (menu_item), FALSE);
+
+    if (!label || strlen(label) == 0)
+       label = get_menu_label_text (GTK_WIDGET (menu_item), NULL);
+    printf("%s %s\n", G_STRFUNC, label);
+    itemTitle = [NSString stringWithUTF8String:label];
+    printf("%s %s\n", G_STRFUNC, [itemTitle UTF8String]);
+    if (!cocoaMenuItem) {
+	cocoaMenuItem = [menu insertItemWithTitle:itemTitle action:nil 
+			 keyEquivalent: @"" atIndex:(NSInteger)position];
+	if (cocoaMenuItem) {
+		printf ("%s Created item with title %s from %s\n", G_STRFUNC, [[cocoaMenuItem title] UTF8String], [itemTitle UTF8String]);
+		new_item = TRUE;
+	}
+	else {
+		printf ("%s New Item Creation Failed\n", G_STRFUNC);
+		return FALSE;
+	}
+    }
+    [target addAction:cocoaMenuItem with:menu_item];
+    return new_item;
+}
+
+static void
+app_menu_insert_separator(gint position) {
+    NSMenu *menu = [[[[NSApplication sharedApplication] mainMenu] itemAtIndex:0] submenu];
+    [menu insertItem:[NSMenuItem separatorItem] atIndex:position];
+}
+#endif //USE_COCOA
+
 /*
  * carbon event handler
  */
@@ -1341,8 +1496,8 @@ _create_application_menus(void)
 
 void
 ige_mac_menu_set_menu_bar (GtkMenuShell *menu_shell) {
-    OSXMenu    *current_menu;
 #ifdef USE_CARBON
+    OSXMenu    *current_menu;
     OSXMenuRef 	osx_menubar;
     OSStatus    err;
     GtkWidget  *parent = gtk_widget_get_toplevel(GTK_WIDGET(menu_shell));
@@ -1408,12 +1563,9 @@ ige_mac_menu_set_quit_menu_item (GtkMenuItem *menu_item) {
     OSXMenuRef       appmenu;
     MenuItemIndex index;
     OSStatus err;
-#else //USE_COCOA
-    OSXMenuItem *osx_item = osx_menu_item_get (GTK_WIDGET (menu_item));
-#endif
+
     g_return_if_fail (GTK_IS_MENU_ITEM (menu_item));
     setup_menu_event_handler ();
-#ifdef USE_CARBON
     err = GetIndMenuItemWithCommandID (NULL, kHICommandQuit, 1,
 					&appmenu, &index);
     carbon_menu_err_return(err, "Failed to obtain Quit Menu");
@@ -1425,15 +1577,11 @@ ige_mac_menu_set_quit_menu_item (GtkMenuItem *menu_item) {
 			       &menu_item);
     carbon_menu_err_return(err, 
 			   "Failed to associate Quit menu item");
-#else //USE_COCOA
-    //FIXME: Non-functional implementation
-    NS_DURING
-    [[osx_item->menuitem menu] removeItem: osx_item->menuitem];
-    NS_HANDLER
-	    //FIXME: Implement handler
-    NS_ENDHANDLER
-#endif
     gtk_widget_hide (GTK_WIDGET (menu_item));
+#elif defined USE_COCOA
+    g_return_if_fail (GTK_IS_MENU_ITEM (menu_item));
+    app_menu_take_item(menu_item, 0, "Quit");
+#endif
     return;
 }
 
@@ -1472,58 +1620,32 @@ _ige_mac_menu_is_quit_menu_item_handled (void) {
 						&appmenu, &index);
     carbon_menu_warn(err, "failed with");
     return (err == noErr);
-#else //FIXME: No Cocoa Implementation
-    return 1;
+#elif defined USE_COCOA
+       NSMenu *menu = [[[[NSApplication sharedApplication] mainMenu] itemAtIndex:0] submenu];
+    NSString *itemTitle = [NSString stringWithUTF8String:"Quit"];
+    NSMenuItem *cocoaMenuItem = [menu itemWithTitle:itemTitle];
+    return ([cocoaMenuItem action] != nil);
+
 #endif
 }
 
-
-struct _IgeMacMenuGroup {
-    GList *items;
-};
-
-static GList *app_menu_groups = NULL;
-
-IgeMacMenuGroup *
-ige_mac_menu_add_app_menu_group (void) {
-    IgeMacMenuGroup *group = g_slice_new0 (IgeMacMenuGroup);
-
-    app_menu_groups = g_list_append (app_menu_groups, group);
-    return group;
-}
 
 void
 ige_mac_menu_add_app_menu_item (IgeMacMenuGroup *group, GtkMenuItem *menu_item,
 				const gchar *label) {
 #ifdef USE_CARBON
     OSXMenuRef  appmenu;
-#else //USE_COCOA
-    OSXMenuRef  appmenu = nil;
-#endif
     GList   *list;
     gint     index = 0;
-#ifdef USE_CARBON
     CFStringRef cfstr;
     OSStatus err;
-#else //USE_COCOA
-    OSXMenuItem *osx_item = osx_menu_item_get (GTK_WIDGET (menu_item));
-    NSString *nsstr;
-    NSMenuItem *item;
-#endif
+
     g_return_if_fail (group != NULL);
     g_return_if_fail (GTK_IS_MENU_ITEM (menu_item));
     setup_menu_event_handler ();
-#ifdef USE_CARBON
     err = GetIndMenuItemWithCommandID (NULL, kHICommandHide, 1,
 				       &appmenu, NULL);
     carbon_menu_err_return(err, "retrieving app menu failed");
-#else //USE_COCOA
-    NS_DURING
-    appmenu = [NSApp mainMenu];
-    NS_HANDLER
-	    //FIXME: Implement handler
-    NS_ENDHANDLER
-#endif
     for (list = app_menu_groups; list; list = g_list_next (list)) {
 	IgeMacMenuGroup *list_group = list->data;
 
@@ -1540,22 +1662,13 @@ ige_mac_menu_add_app_menu_item (IgeMacMenuGroup *group, GtkMenuItem *menu_item,
 	 *  for the first group
 	 */
 	if (!group->items && list->prev) {
-#ifdef USE_CARBON
 	    err = InsertMenuItemTextWithCFString (appmenu, NULL, index,
 						  kMenuItemAttrSeparator, 0);
 	    carbon_menu_err_return(err, "Failed to add separator");
-#else //USE_COCOA
-	    NS_DURING
-	    [appmenu addItem: [NSMenuItem separatorItem]];
-	    NS_HANDLER
-		//Implement error handler
-	    NS_ENDHANDLER
-#endif
 	    index++;
 	}
 	if (!label)
 	    label = get_menu_label_text (GTK_WIDGET (menu_item), NULL);
-#ifdef USE_CARBON
 	cfstr = CFStringCreateWithCString (NULL, label,
 					   kCFStringEncodingUTF8);
 	err = InsertMenuItemTextWithCFString (appmenu, cfstr, index, 0, 0);
@@ -1566,25 +1679,6 @@ ige_mac_menu_add_app_menu_item (IgeMacMenuGroup *group, GtkMenuItem *menu_item,
 				   sizeof (menu_item), &menu_item);
 	CFRelease (cfstr);
 	carbon_menu_err_return(err, "Failed to associate Gtk Widget");
-#else //USE_COCOA
-	NS_DURING
-	nsstr = [NSString stringWithUTF8String: label];
-	item = [[NSMenuItem alloc] initWithTitle: nsstr
-	        action:NULL keyEquivalent:@""];
-        [appmenu addItem: item];
-#if 0 //FIXME: No Cocoa Implementation
-	err = SetMenuItemProperty (appmenu, index + 1,
-				   IGE_QUARTZ_MENU_CREATOR,
-				   IGE_QUARTZ_ITEM_WIDGET,
-				   sizeof (menu_item), &menu_item);
-#endif
-        if (nsstr)
-            [nsstr release];
-        [[osx_item->menuitem menu] removeItem: osx_item->menuitem];
-	NS_HANDLER
-	//Implement error handler
-	NS_ENDHANDLER
-#endif
 	gtk_widget_hide (GTK_WIDGET (menu_item));
 	group->items = g_list_append (group->items, menu_item);
 	return;
@@ -1592,6 +1686,14 @@ ige_mac_menu_add_app_menu_item (IgeMacMenuGroup *group, GtkMenuItem *menu_item,
     }
     if (!list)
 	g_warning ("%s: app menu group %p does not exist", G_STRFUNC, group);
+#elif defined USE_COC
+    gint     index = app_menu_group_last_index(group);
+
+    g_return_if_fail (group != NULL);
+    g_return_if_fail (GTK_IS_MENU_ITEM (menu_item));
+    if (app_menu_take_item(menu_item, index++, label))
+	group->items = g_list_append (group->items, menu_item);
+#endif
 }
 
 void
