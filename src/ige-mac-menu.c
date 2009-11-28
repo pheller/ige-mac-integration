@@ -237,6 +237,20 @@ static CarbonMenuItem *carbon_menu_item_create (GtkWidget *menu_Item,
 	    g_printerr("%s: %s %s %s\n", G_STRFUNC, label, msg, carbon_menu_error_string(err)); \
 	return val;\
     }
+
+/*
+ * ActivatIdleData
+ */
+
+typedef struct {
+    GtkWidget *widget;
+} ActivateIdleData;
+
+static void activate_destroy_cb (gpointer user_data);
+static gboolean activate_idle_cb (gpointer user_data);
+
+/* End Declarations */
+
 carbon_menu_new (void) {
     return g_slice_new0 (CarbonMenu);
 }
@@ -678,10 +692,6 @@ carbon_menu_item_create (GtkWidget *menu_item, MenuRef carbon_menu,
     return carbon_item;
 }
 
-
-typedef struct {
-    GtkWidget *widget;
-} ActivateIdleData;
 
 static void
 activate_destroy_cb (gpointer user_data) {
