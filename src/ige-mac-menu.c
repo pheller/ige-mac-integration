@@ -143,6 +143,100 @@ static CarbonMenu *carbon_menu_get (GtkWidget *widget);
 static void carbon_menu_connect (GtkWidget *menu, MenuRef menuRef, 
 				 gboolean toplevel);
 
+
+/*
+ * CarbonMenuItem
+ *
+ * Like CarbonMenu, the CarbonMenuItem contains a reference to the OSX
+ * Menu which contains it and the index the menu item in that menu
+ * (there aren't pointers directly to menu items in Carbon like there
+ * are in Cocoa). If the item has a submenu, there's a reference for
+ * that object as well, and there's a pointer to the accelerator for
+ * connecting signals from. This structure is inserted into the
+ * GtkMenuItem, and pointer to the GtkMenuItem is attached to the OSX
+ * Menu at the indicated index. Much effort goes into ensuring that
+ * the indices stay synchronized, as interesting behavior will result
+ * if they get out of sync.
+ */
+typedef struct {
+    MenuRef        menu;
+    MenuItemIndex  index;
+    MenuRef        submenu;
+    GClosure      *accel_closure;
+} CarbonMenuItem;
+
+static GQuark carbon_menu_item_quark = 0;
+
+static CarbonMenuItem *carbon_menu_item_new (void);
+static void carbon_menu_item_free (CarbonMenuItem *menu_item);
+static const gchar *carbon_menu_error_string (OSStatus err);
+static CarbonMenuItem *carbon_menu_item_get (GtkWidget *widget);
+static CarbonMenuItem *carbon_menu_item_get_checked (GtkWidget *widget);
+static void carbon_menu_item_update_state (CarbonMenuItem *carbon_item, 
+					   GtkWidget *widget);
+static void carbon_menu_item_update_active (CarbonMenuItem *carbon_item,
+					    GtkWidget *widget);
+static void carbon_menu_item_update_submenu (CarbonMenuItem *carbon_item,
+					     GtkWidget *widget);
+static void carbon_menu_item_update_label (CarbonMenuItem *carbon_item,
+					   GtkWidget *widget);
+static void carbon_menu_item_update_accelerator (CarbonMenuItem *carbon_item,
+						 GtkWidget *widget);
+static void carbon_menu_item_accel_changed (GtkAccelGroup *accel_group, 
+					    guint keyval,
+					    GdkModifierType modifier,
+					    GClosure *accel_closure,
+					    GtkWidget *widget);
+static void carbon_menu_item_update_accel_closure (CarbonMenuItem *carbon_item,
+						   GtkWidget *widget);
+static void carbon_menu_item_notify (GObject *object, GParamSpec *pspec,
+				     CarbonMenuItem *item);
+static void carbon_menu_item_notify_label (GObject *object, GParamSpec *pspec,
+					   gpointer data);
+static CarbonMenuItem *carbon_menu_item_connect (GtkWidget *menu_item, 
+						 GtkWidget *label,
+						 MenuRef menu,
+						 MenuItemIndex index);
+static CarbonMenuItem *carbon_menu_item_create (GtkWidget *menu_Item,
+						MenuRef carbon_menu,
+						MenuItemIndex index,
+						bool debug);
+
+#define carbon_menu_warn(err, msg) \
+    if (err && DEBUG_CARBON) \
+	g_printerr("%s: %s %s\n", G_STRFUNC, msg, carbon_menu_error_string(err));
+
+#define carbon_menu_warn_label(err, label, msg) \
+    if (err && DEBUG_CARBON) \
+	g_printerr("%s: %s %s %s\n", G_STRFUNC, label, msg, carbon_menu_error_string(err));
+
+#define carbon_menu_err_return(err, msg) \
+    if (err) { \
+    	if (DEBUG_CARBON) \
+	    g_printerr("%s: %s %s\n", G_STRFUNC, msg, carbon_menu_error_string(err)); \
+	return;\
+    }
+
+#define carbon_menu_err_return_val(err, msg, val) \
+    if (err) { \
+    	if (DEBUG_CARBON) \
+	    g_printerr("%s: %s %s\n", G_STRFUNC, msg, carbon_menu_error_string(err)); \
+	return val;\
+    }
+
+#define carbon_menu_err_return_label(err, label, msg)	\
+    if (err) { \
+    	if (DEBUG_CARBON) \
+	    g_printerr("%s: %s %s %s\n", G_STRFUNC, label, msg, carbon_menu_error_string(err)); \
+	return;\
+    }
+
+#define carbon_menu_err_return_label_val(err, label, msg, val)	\
+    if (err) { \
+    	if (DEBUG_CARBON) \
+	    g_printerr("%s: %s %s %s\n", G_STRFUNC, label, msg, carbon_menu_error_string(err)); \
+	return val;\
+    }
 carbon_menu_new (void) {
     return g_slice_new0 (CarbonMenu);
 }
@@ -172,36 +266,14 @@ carbon_menu_connect (GtkWidget *menu, MenuRef menuRef, gboolean toplevel) {
 }
 
 
-/*
- * CarbonMenuItem functions
- *
- * Like CarbonMenu, the CarbonMenuItem contains a reference to the OSX
- * Menu which contains it and the index the menu item in that menu
- * (there aren't pointers directly to menu items in Carbon like there
- * are in Cocoa). If the item has a submenu, there's a reference for
- * that object as well, and there's a pointer to the accelerator for
- * connecting signals from. This structure is inserted into the
- * GtkMenuItem, and pointer to the GtkMenuItem is attached to the OSX
- * Menu at the indicated index. Much effort goes into ensuring that
- * the indices stay synchronized, as interesting behavior will result
- * if they get out of sync.
- */
+/* CarbonMenuItem Functions */
 
-typedef struct {
-    MenuRef        menu;
-    MenuItemIndex  index;
-    MenuRef        submenu;
-    GClosure      *accel_closure;
-} CarbonMenuItem;
-
-static GQuark carbon_menu_item_quark = 0;
-
-static CarbonMenuItem *
+CarbonMenuItem *
 carbon_menu_item_new (void) {
     return g_slice_new0 (CarbonMenuItem);
 }
 
-static void
+void
 carbon_menu_item_free (CarbonMenuItem *menu_item) {
     DeleteMenuItem(menu_item->menu, menu_item->index);  //Clean up the Carbon Menu
     if (menu_item->accel_closure)
@@ -262,41 +334,6 @@ carbon_menu_error_string(OSStatus err) {
     return "System Error: Unreachable";
 }
 
-#define carbon_menu_warn(err, msg) \
-    if (err && DEBUG_CARBON) \
-	g_printerr("%s: %s %s\n", G_STRFUNC, msg, carbon_menu_error_string(err));
-
-#define carbon_menu_warn_label(err, label, msg) \
-    if (err && DEBUG_CARBON) \
-	g_printerr("%s: %s %s %s\n", G_STRFUNC, label, msg, carbon_menu_error_string(err));
-
-#define carbon_menu_err_return(err, msg) \
-    if (err) { \
-    	if (DEBUG_CARBON) \
-	    g_printerr("%s: %s %s\n", G_STRFUNC, msg, carbon_menu_error_string(err)); \
-	return;\
-    }
-
-#define carbon_menu_err_return_val(err, msg, val) \
-    if (err) { \
-    	if (DEBUG_CARBON) \
-	    g_printerr("%s: %s %s\n", G_STRFUNC, msg, carbon_menu_error_string(err)); \
-	return val;\
-    }
-
-#define carbon_menu_err_return_label(err, label, msg)	\
-    if (err) { \
-    	if (DEBUG_CARBON) \
-	    g_printerr("%s: %s %s %s\n", G_STRFUNC, label, msg, carbon_menu_error_string(err)); \
-	return;\
-    }
-
-#define carbon_menu_err_return_label_val(err, label, msg, val)	\
-    if (err) { \
-    	if (DEBUG_CARBON) \
-	    g_printerr("%s: %s %s %s\n", G_STRFUNC, label, msg, carbon_menu_error_string(err)); \
-	return val;\
-    }
 
 static CarbonMenuItem *
 carbon_menu_item_get (GtkWidget *widget) {
