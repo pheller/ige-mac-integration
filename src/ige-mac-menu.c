@@ -131,12 +131,12 @@ accel_find_func (GtkAccelKey *key, GClosure *closure, gpointer data) {
 
 typedef struct {
     MenuRef menu;
+    CarrbonAppMenu *app_menu;
     guint   toplevel : 1;
 } CarbonMenu;
 
 static GQuark carbon_menu_quark = 0;
 
-static CarbonMenu *
 static CarbonMenu *carbon_menu_new (void);
 static void carbon_menu_free (CarbonMenu *menu);
 static CarbonMenu *carbon_menu_get (GtkWidget *widget);
@@ -255,22 +255,110 @@ static gboolean activate_idle_cb (gpointer user_data);
 
 /* End Declarations */
 
+/* CarbonAppMenu Functions */
+
+CarbonAppMenu *
+carbon_app_menu_new() {
+    CarbonAppMenu *menu = g_slice_new0 (CarbonAppMenu);
+    if (appMenu == NULL) {
+	MenuItemIndex index;
+	OSStatus err =  GetIndMenuItemWithCommandID (NULL, kHICommandQuit, 1,
+					&appMenu, &index);
+	carbon_menu_err_return_val(err, "Failed to obtain App Menu", NULL);
+    }
+    menu->app_menu_items = g_list_new();
+    return menu;
+}
+
+void
+carbon_app_menu_free (CarbonAppMenu *app_menu) {
+    if (app_menu == NULL)
+	return;
+    g_list_free (app_menu->app_menu_items);
+    if (app_menu->quit_menu_item)
+	carbon_menu_item_free (app_menu->quit_menu_item);
+    g_slice_free(CarbonAppMenu app_menu);
+    return;
+}
+
+void
+carbon_app_menu_set_quit_menu (CarbonAppMenu *app_menu, GtkWidget *quit_item) {
+    MenuRef menuRef;
+    MenuItemIndex index;
+    OSStatus err =  GetIndMenuItemWithCommandID (NULL, kHICommandQuit, 1,
+						 &appmenu, &index);
+    carbon_menu_err_return(err, "Failed to obtain Quit Menu");
+    if (appMenu != menuRef) {
+	printf ("%s Application Menu Mismatch!\n", G_STRFUNC);
+	return;
+    }
+    if (carbon_menu_item_attach(quit_item, NULL, appMenu, index))
+	app_menu->quit_menu_item = quit_item;  
+}
+
+GtkWidget *
+carbon_menu_item_get_quit_menu_item (CarbonAppMenu *app_menu) {
+    return app_menu->quit_menu_item;
+}
+
+void
+carbon_app_menu_add_menu_item (CarbonAppMenu *app_menu, GtkWidget *widget,
+			       MenuItemIndex index) {
+    if (carbon_menu_item_attach(appMenu, index, widget, DEBUG_SET))
+	g_list_append(app_menu->app_menu_items, widget);
+}
+
+GtkWidget *
+carbon_app_menu_get_menu_item (CarbonAppMenu *app_menu, 
+				    MenuItemIndex index) {
+    CarbonMenuItem* menu_item;
+    for (menu_item = app_menu->app_menu_items; menu_item; 
+	 g_list_next (app_menu->app_menu_items)) 
+	if (menu_item->index = index)
+	    break;
+    return menu_item;
+}
+
+void
+carbon_app_menu_sync (CarbonAppMenu *app_menu) {
+    OSStatus err;
+    CarbonMenuItem *quit_carbon_item = 
+	carbon_menu_item_get(app_menu->quit_menu_item);
+
+    for (menu_item = app_menu->app_menu_items; menu_item; 
+	 g_list_next (app_menu->app_menu_items)) {
+	err = SetMenuItemProperty (appMenu, menu_item->index,
+			       IGE_QUARTZ_MENU_CREATOR,
+			       IGE_QUARTZ_ITEM_WIDGET,
+			       sizeof (menu_item), &menu_item);
+	carbon_menu_err_warn (err, "Failed to syncronize item");
+    }
+    err = SetMenuItemProperty (appMenu, quit_carbon_item->index, 
+			       IGE_QUARTZ_MENU_CREATOR,
+			       IGE_QUARTZ_ITEM_WIDGET,
+			       sizeof (app_menu->quit_menu_item), &menu_item);
+}
+
+/* CarbonMenu Functions */
+
+CarbonMenu *
 carbon_menu_new (void) {
     return g_slice_new0 (CarbonMenu);
 }
 
-static void
+void
 carbon_menu_free (CarbonMenu *menu) {
-    DisposeMenu(menu->menu);
+    DisposeMenu (menu->menu);
+    carbon_app_menu_free (menu->app_menu);
     g_slice_free (CarbonMenu, menu);
 }
 
-static CarbonMenu *
+CarbonMenu *
 carbon_menu_get (GtkWidget *widget) {
     return g_object_get_qdata (G_OBJECT (widget), carbon_menu_quark);
 }
 
-static void
+void
 carbon_menu_connect (GtkWidget *menu, MenuRef menuRef, gboolean toplevel) {
     CarbonMenu *carbon_menu = carbon_menu_get (menu);
     if (!carbon_menu) {
