@@ -119,7 +119,7 @@ accel_find_func (GtkAccelKey *key, GClosure *closure, gpointer data) {
 
 
 /*
- * CarbonMenu functions
+ * CarbonMenu
  *
  * A CarbonMenu contains a reference to the OSX menu; connect attaches
  * it to the GtkMenu so that sync_menu will know which OSX menu to
@@ -137,6 +137,12 @@ typedef struct {
 static GQuark carbon_menu_quark = 0;
 
 static CarbonMenu *
+static CarbonMenu *carbon_menu_new (void);
+static void carbon_menu_free (CarbonMenu *menu);
+static CarbonMenu *carbon_menu_get (GtkWidget *widget);
+static void carbon_menu_connect (GtkWidget *menu, MenuRef menuRef, 
+				 gboolean toplevel);
+
 carbon_menu_new (void) {
     return g_slice_new0 (CarbonMenu);
 }
