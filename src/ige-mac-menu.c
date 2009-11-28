@@ -197,6 +197,10 @@ static CarbonMenuItem *carbon_menu_item_connect (GtkWidget *menu_item,
 						 GtkWidget *label,
 						 MenuRef menu,
 						 MenuItemIndex index);
+static CarbonMenuItem *carbon_menu_item_attach (GtkWidget *menu_item, 
+						MenuRef carbon_menu, 
+						MenuItemIndex index, 
+						gboolean debug)
 static CarbonMenuItem *carbon_menu_item_create (GtkWidget *menu_Item,
 						MenuRef carbon_menu,
 						MenuItemIndex index,
@@ -638,7 +642,36 @@ carbon_menu_item_connect (GtkWidget *menu_item, GtkWidget *label,
     return carbon_item;
 }
 
-static CarbonMenuItem *
+CarbonMenuItem *
+carbon_menu_item_attach (GtkWidget *menu_item, MenuRef carbon_menu, 
+			 MenuItemIndex index, gboolean debug) {
+    GtkWidget          *label      = NULL;
+    const gchar        *label_text;
+    CarbonMenuItem *carbon_item;
+    label_text = get_menu_label_text (quit_item, &label);
+    carbon_item = carbon_menu_item_connect (menu_item, label,
+					    carbon_menu,
+					    index);
+    if (!carbon_item) { //Got a bad carbon_item, bail out
+	printf ("%s Connect CarbonMenuItem Failed for %s\n", G_STRFUNC,
+		label_text);
+	return carbon_item;
+    }
+    err = SetMenuItemProperty (carbon_menu, index,
+			       IGE_QUARTZ_MENU_CREATOR,
+			       IGE_QUARTZ_ITEM_WIDGET,
+			       sizeof (menu_item), &menu_item);
+    carbon_menu_warn_label(err, label_text,
+			   "Failed to set menu property");
+    if (GTK_IS_CHECK_MENU_ITEM (menu_item))
+	carbon_menu_item_update_active (carbon_item, menu_item);
+    carbon_menu_item_update_accel_closure (carbon_item, menu_item);
+    if (gtk_menu_item_get_submenu (GTK_MENU_ITEM (menu_item)))
+	carbon_menu_item_update_submenu (carbon_item, menu_item, debug);
+    return carbon_item;
+}
+
+CarbonMenuItem *
 carbon_menu_item_create (GtkWidget *menu_item, MenuRef carbon_menu,
 			 MenuItemIndex index, bool debug) {
     GtkWidget          *label      = NULL;
@@ -664,31 +697,9 @@ carbon_menu_item_create (GtkWidget *menu_item, MenuRef carbon_menu,
 					  attributes, 0);
     carbon_menu_err_return_label_val(err, label_text, 
 				     "Failed to insert menu item", NULL);
-    err = SetMenuItemProperty (carbon_menu, index,
-			       IGE_QUARTZ_MENU_CREATOR,
-			       IGE_QUARTZ_ITEM_WIDGET,
-			       sizeof (menu_item), &menu_item);
-
-    if (cfstr)
-	CFRelease (cfstr);
-    if (err) {
-	carbon_menu_warn_label(err, label_text,
-				   "Failed to set menu property");
-  	DeleteMenuItem(carbon_menu, index); //Clean up the extra menu item
-	return NULL;
-    }
-    carbon_item = carbon_menu_item_connect (menu_item, label,
-					    carbon_menu,
-					    index);
-    if (!carbon_item) { //Got a bad carbon_item, bail out
+    carbon_item = carbon_menu_item_attach(menu_item, carbon_Menu, index, debug);
+    if (!carbon_item) //Got a bad carbon_item, bail out
 	DeleteMenuItem(carbon_menu, index); //Clean up the extra menu item
-	return carbon_item;
-    }
-    if (GTK_IS_CHECK_MENU_ITEM (menu_item))
-	carbon_menu_item_update_active (carbon_item, menu_item);
-    carbon_menu_item_update_accel_closure (carbon_item, menu_item);
-    if (gtk_menu_item_get_submenu (GTK_MENU_ITEM (menu_item)))
-	carbon_menu_item_update_submenu (carbon_item, menu_item, debug);
     return carbon_item;
 }
 
