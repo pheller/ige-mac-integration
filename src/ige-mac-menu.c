@@ -116,7 +116,30 @@ static gboolean
 accel_find_func (GtkAccelKey *key, GClosure *closure, gpointer data) {
     return (GClosure *) data == closure;
 }
+/*
+ * CarbonAppMenu
+ *
+ * CarbonAppMenu is an auxiliary class for toplevel CarbonMenus that
+ * provides pointers and functions for adding functions to the app
+ * menu (the one all the way on the left of the OSX menubar, so called
+ * because it has the application's name as its title.
+ */
+typedef struct {
+    GList *app_menu_items;
+    gpointer quit_item;
+} CarbonAppMenu;
 
+static CarbonAppMenu *carbon_app_menu_new (void);
+static void carbon_app_menu_free (CarbonAppMenu *app_menu);
+static void carbon_app_menu_set_quit_menu (CarbonAppMenu *app_menu,
+					   GtkWidget *quit_item);
+static GtkWidget *carbon_app_menu_get_quit_menu_item (CarbonAppMenu *app_menu);
+static void carbon_app_menu_add_menu_item (CarbonAppMenu *app_menu, 
+					   GtkWidget *widget, 
+					   MenuItemIndex index);
+static GtkWidget *carbon_app_menu_get_menu_item (CarbonAppMenu *app_menu,
+						 MenuItemIndex index);
+static void carbon_app_menu_sync (CarbonAppMenu *app_menu);
 
 /*
  * CarbonMenu
@@ -131,7 +154,7 @@ accel_find_func (GtkAccelKey *key, GClosure *closure, gpointer data) {
 
 typedef struct {
     MenuRef menu;
-    CarrbonAppMenu *app_menu;
+    CarbonAppMenu *app_menu;
     guint   toplevel : 1;
 } CarbonMenu;
 
