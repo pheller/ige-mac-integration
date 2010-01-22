@@ -34,6 +34,11 @@ typedef struct _IgeMacMenuGroup IgeMacMenuGroup;
 void ige_mac_menu_set_menu_bar (GtkMenuShell *menu_shell);
 void ige_mac_menu_set_quit_menu_item (GtkMenuItem *menu_item);
 IgeMacMenuGroup *ige_mac_menu_add_app_menu_group (void);
+/* Warning! Carbon menu Items are managed with indexes, and this
+ * library uses those indexes to associate GtkMenuItems with Carbon
+ * Menu Items. If you add a new menu item out of order, that will
+ * cause the wrong GtkMenuItem to be invoked when the user selects a
+ * Carbon Menu Item. */
 void ige_mac_menu_add_app_menu_item (IgeMacMenuGroup *group, 
 				     GtkMenuItem *menu_item, 
 				     const gchar *label);
