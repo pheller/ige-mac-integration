@@ -316,6 +316,7 @@ create_window(IgeMacDock *dock, const gchar *title)
   g_object_set_qdata_full(G_OBJECT(window), menu_items_quark, 
 			  items, (GDestroyNotify)menu_items_destroy);
 
+  ige_mac_menu_sync (GTK_MENU_SHELL (menubar));
   return window;
 }
 
