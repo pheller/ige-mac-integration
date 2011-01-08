@@ -68,4 +68,23 @@ extern NSMenu* _gtk_osxapplication_dock_menu(GtkOSXApplication* app);
     return _gtk_osxapplication_dock_menu(app);
 }
 
+-(void) getUrl:(NSAppleEventDescriptor *)event withReplyEvent:(NSAppleEventDescriptor *)replyEvent
+{
+  NSString *url = [[event paramDescriptorForKeyword:keyDirectObject] stringValue];
+  GtkOSXApplication *app = g_object_new(GTK_TYPE_OSX_APPLICATION, NULL);
+  guint sig = g_signal_lookup("NSApplicationOpenURL",
+                  GTK_TYPE_OSX_APPLICATION);
+  if (sig)
+    g_signal_emit(app, sig, 0, [url UTF8String]);
+  g_object_unref(app);
+}
+
+-(void)applicationWillFinishLaunching:(NSNotification *)aNotification {
+  [[NSAppleEventManager sharedAppleEventManager] 
+	setEventHandler:self 
+	andSelector:@selector(getUrl:withReplyEvent:) 
+	forEventClass:kInternetEventClass 
+	andEventID:kAEGetURL];
+}
+
 @end

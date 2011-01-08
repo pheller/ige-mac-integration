@@ -502,6 +502,12 @@ app_open_file_cb (GtkOSXApplication *app, gchar *path, gpointer user_data)
     return FALSE;
 }
 
+static void
+app_open_url_cb (GtkOSXApplication *app, gchar *url, gpointer user_data)
+{
+    g_print("URL open event for %s", url);
+}
+
 #endif //GTKOSXAPPLICATION
 #ifdef IGEMACINTEGRATION
 
@@ -704,6 +710,8 @@ main (int argc, char **argv)
 		     G_CALLBACK(app_will_quit_cb), NULL);
     g_signal_connect(theApp, "NSApplicationOpenFile",
 		     G_CALLBACK(app_open_file_cb), NULL);
+    g_signal_connect(theApp, "NSApplicationOpenURL",
+             G_CALLBACK(app_open_url_cb), NULL);
   }
 #ifndef QUARTZ_HANDLERS
   gtk_osxapplication_set_use_quartz_accelerators(theApp, FALSE);

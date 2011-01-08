@@ -440,6 +440,7 @@ enum {
     BlockTermination,
     WillTerminate,
     OpenFile,
+    OpenURL,
     LastSignal
 };
 
@@ -462,6 +463,7 @@ gtk_osxapplication_init (GtkOSXApplication *self)
   gdk_window_add_filter (NULL, global_event_filter_func, (gpointer)self);
   self->priv->notify = [[GtkApplicationNotificationObject alloc] init];
   [self->priv->notify retain];
+
   [ NSApp setDelegate: [GtkApplicationDelegate new]];
 }
 
@@ -571,6 +573,22 @@ gtk_osxapplication_signals[OpenFile] =
 	       0, NULL, NULL,
 	       g_cclosure_marshal_BOOLEAN__STRING,
 	       G_TYPE_BOOLEAN, 1, G_TYPE_STRING);
+
+/**
+ * GtkOSXApplication::NSApplicationOpenURL:
+ * 
+ * Emitted when ...
+ *
+ * Returns: Nothing
+ */
+
+gtk_osxapplication_signals[OpenURL] =
+    g_signal_new("NSApplicationOpenURL",
+           GTK_TYPE_OSX_APPLICATION,
+           G_SIGNAL_NO_RECURSE | G_SIGNAL_ACTION,
+           0, NULL, NULL,
+           g_cclosure_marshal_BOOLEAN__STRING,
+           G_TYPE_NONE, 1, G_TYPE_STRING);
 
 }
 

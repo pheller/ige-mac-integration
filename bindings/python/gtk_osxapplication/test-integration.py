@@ -65,6 +65,8 @@ class MainWindow(gtk.Window):
         item.show()
         macapp.insert_app_menu_item(item, 3)
 
+        macapp.connect("NSApplicationOpenURL", self.openUrl)
+
 #    def dock_clicked_cb(self, dock):
 #        print "Dock clicked"
 
@@ -73,6 +75,12 @@ class MainWindow(gtk.Window):
             print widget.child.get_text()
         except:
             print widget
+
+    def openUrl(self, widget, url):
+        alert = gtk.MessageDialog(self,
+            gtk.DIALOG_DESTROY_WITH_PARENT, gtk.MESSAGE_INFO,
+            gtk.BUTTONS_NONE, url)
+        alert.show()
             
 if __name__ == '__main__':
     macapp = OSXApplication()
